@@ -308,6 +308,16 @@ h2.sec{font-size:clamp(28px,3.8vw,40px);margin:0 0 8px;font-weight:900;letter-sp
 .toast.show{transform:translate(-50%,0)}
 .toast.error{background:#b3261e;color:#fff}
 
+.music-btn{position:fixed;left:18px;bottom:18px;z-index:55;border:0;border-radius:999px;padding:11px 18px;font:inherit;font-weight:800;
+  font-size:14px;background:var(--surface);color:var(--text);box-shadow:var(--shadow);cursor:pointer;display:flex;align-items:center;gap:8px;transition:transform .2s}
+.music-btn:hover{transform:translateY(-3px) scale(1.04)}
+.music-btn:focus-visible{outline:3px solid var(--sun)}
+.music-btn.on{background:linear-gradient(90deg,var(--coral),var(--sun));color:#fff}
+.eq{display:inline-flex;gap:2px;align-items:flex-end;height:14px}
+.eq i{display:inline-block;width:3px;height:4px;background:currentColor;border-radius:2px}
+.music-btn.on .eq i{animation:eqb .8s ease-in-out infinite alternate}
+.music-btn.on .eq i:nth-child(2){animation-delay:.25s}.music-btn.on .eq i:nth-child(3){animation-delay:.5s}
+@keyframes eqb{to{height:14px}}
 footer{text-align:center;color:var(--muted);font-size:14px;padding:40px 0 60px;position:relative;z-index:1}
 footer .big{font-size:20px;font-weight:900;color:var(--text);margin-bottom:6px}
 </style>
@@ -479,6 +489,7 @@ footer .big{font-size:20px;font-weight:900;color:var(--text);margin-bottom:6px}
   </div>
 </div>
 
+<button class="music-btn" id="musicBtn" aria-pressed="false">🎵 <span class="lbl">Bật nhạc nền</span><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span></button>
 <div class="toast" id="toast" role="status"></div>
 
 <script>
@@ -812,11 +823,12 @@ function showChorus(t){
   const c=$('#chorus'); c.textContent=t; c.classList.add('show');
   setTimeout(()=>c.classList.remove('show'), 1700);
 }
-async function typeInto(el, text){
+async function typeInto(el, text, id){
   el.innerHTML = '';
   for (let i=1;i<=text.length;i++){
     if (stopFlag) break;
     el.textContent = text.slice(0,i);
+    if (id && i % 3 === 0 && text[i-1] !== ' ') blip(id, i);
     await sleep(text[i-1]===' '? 8 : 17);
   }
   el.textContent = text;
@@ -827,7 +839,7 @@ async function speak(id, text){
   a.wrap.classList.add('speak','talking');
   glanceAt(id);
   a.bubble.classList.add('show','big');
-  await typeInto(a.bubble, text);
+  await typeInto(a.bubble, text, id);
   await sleep(Math.max(1500, text.length*38));
   a.wrap.classList.remove('speak','talking');
   a.bubble.classList.remove('show','big');
@@ -947,6 +959,7 @@ function openChar(id){
   $('#mLines').innerHTML = '';
   $('#modal').classList.add('open');
   $('#mClose').focus();
+  sfx('whoosh');
   showLinesInModal(c);
 }
 async function showLinesInModal(c){
@@ -966,7 +979,7 @@ $('#mListen').addEventListener('click', ()=>{
   setTimeout(()=>speakSingle(currentChar.id), 350);
   $('#san-khau').scrollIntoView({behavior:'smooth', block:'center'});
 });
-function closeChar(){ $('#modal').classList.remove('open'); }
+function closeChar(){ if ($('#modal').classList.contains('open')) sfx('whoosh'); $('#modal').classList.remove('open'); }
 $('#mClose').addEventListener('click', closeChar);
 $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeChar(); });
 
@@ -1035,7 +1048,7 @@ async function download(){
   const btn=$('#dlBtn'), label=$('#dlLabel'), bar=$('#pbar'), fill=$('#pfill'), status=$('#dlStatus');
   if (btn.disabled) return;
   btn.disabled=true; bar.classList.add('on'); fill.style.width='0%';
-  const r = btn.getBoundingClientRect(); confetti(r.left+r.width/2, r.top, 50);
+  const r = btn.getBoundingClientRect(); confetti(r.left+r.width/2, r.top, 50); chime();
 
   // Mở bằng file:// (xem trực tiếp trên máy): trình duyệt không cho đọc file bằng fetch, nên tải thẳng
   if (location.protocol === 'file:'){
@@ -1086,6 +1099,144 @@ $('#dlBtn').addEventListener('click', download);
 /* =========================================================
    INIT
    ========================================================= */
+/* =========================================================
+   ÂM THANH: nhạc nền tổng hợp bằng Web Audio + tiếng "blip" khi nhân vật nói
+   ========================================================= */
+const SND = { ctx:null, master:null, fx:null, on:false, timer:null, step:0, nextT:0 };
+const BEAT = 60/84;                                   // 84 BPM
+const CHORDS = [                                      // C · Am · F · G
+  [130.81,164.81,196.00,261.63],
+  [110.00,130.81,164.81,220.00],
+  [87.31,130.81,174.61,220.00],
+  [98.00,123.47,146.83,196.00]
+];
+const MELODY = [523.25,587.33,659.25,783.99,880.00,1046.50];   // âm ngũ cung, nghe nhẹ nhàng
+const VOICE = {hoa:520,nam:300,tuan:360,mai:620,lan:580,co:440,owl:260,hung:340};
+
+function ensureAudio(){
+  if (SND.ctx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  SND.ctx = new AC();
+  SND.master = SND.ctx.createGain();
+  SND.master.gain.value = 0;
+  SND.master.connect(SND.ctx.destination);
+  SND.fx = SND.ctx.createGain();           // bus riêng cho âm thanh click/hiệu ứng
+  SND.fx.gain.value = 0.7;
+  SND.fx.connect(SND.ctx.destination);
+}
+function fxOn(){ return !!(SND.ctx && SND.ctx.state === 'running'); }
+function tone(freq, t, dur, type, vol, attack=0.02, dest=null){
+  const o = SND.ctx.createOscillator(), g = SND.ctx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(vol, t+attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g); g.connect(dest || SND.master);
+  o.start(t); o.stop(t+dur+0.05);
+}
+function scheduleBar(bar, t){
+  const chord = CHORDS[bar % 4];
+  chord.forEach(f => tone(f, t, BEAT*4*0.98, 'sine', 0.016, 0.5));          // đệm hợp âm
+  tone(chord[0]/2, t, BEAT*1.6, 'triangle', 0.10);                          // bass nhịp 1
+  tone(chord[0]/2, t+BEAT*2, BEAT*1.6, 'triangle', 0.07);                   // bass nhịp 3
+  for (let b=0; b<4; b++){                                                  // giai điệu ngẫu nhiên
+    if (Math.random() < 0.3) continue;
+    const f = MELODY[Math.floor(Math.random()*MELODY.length)];
+    tone(f, t + b*BEAT + Math.random()*0.03, BEAT*0.9, 'sine', 0.045, 0.03);
+  }
+}
+function pump(){
+  while (SND.nextT < SND.ctx.currentTime + 0.3){
+    scheduleBar(SND.step, SND.nextT);
+    SND.nextT += BEAT*4; SND.step++;
+  }
+}
+function blip(id, i){
+  if (!fxOn()) return;
+  const t = SND.ctx.currentTime, base = VOICE[id] || 400;
+  const o = SND.ctx.createOscillator(), g = SND.ctx.createGain();
+  o.type = 'triangle'; o.frequency.value = base * (1 + (i%3)*0.07);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.05, t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+0.09);
+  o.connect(g); g.connect(SND.fx); o.start(t); o.stop(t+0.1);
+}
+function chime(){
+  if (!fxOn()) return;
+  const t = SND.ctx.currentTime;
+  [523.25,659.25,783.99,1046.5].forEach((f,i)=>tone(f, t+i*0.12, 0.6, 'sine', 0.07, 0.01, SND.fx));
+}
+async function toggleMusic(){
+  ensureAudio();
+  if (!SND.ctx){ toast('Trình duyệt này không hỗ trợ âm thanh.', true); return; }
+  if (SND.ctx.state === 'suspended') await SND.ctx.resume();
+  SND.on = !SND.on;
+  const btn = $('#musicBtn'), lbl = btn.querySelector('.lbl');
+  const now = SND.ctx.currentTime;
+  SND.master.gain.cancelScheduledValues(now);
+  if (SND.on){
+    lbl.textContent = 'Nhạc & âm thanh: bật';
+    btn.classList.add('on'); btn.setAttribute('aria-pressed','true');
+    SND.master.gain.setValueAtTime(SND.master.gain.value, now);
+    SND.master.gain.linearRampToValueAtTime(0.5, now+1.2);
+    SND.nextT = now + 0.1; SND.step = 0;
+    if (!SND.timer) SND.timer = setInterval(pump, 100);
+    pump();
+  } else {
+    lbl.textContent = 'Bật nhạc nền';
+    btn.classList.remove('on'); btn.setAttribute('aria-pressed','false');
+    SND.master.gain.setValueAtTime(SND.master.gain.value, now);
+    SND.master.gain.linearRampToValueAtTime(0, now+0.4);
+    clearInterval(SND.timer); SND.timer = null;
+  }
+}
+$('#musicBtn').addEventListener('click', toggleMusic);
+/* ---- Âm thanh giao diện: mỗi lần bấm / di chuột đều có tiếng ---- */
+function sfx(type){
+  if (!fxOn()) return;
+  const t = SND.ctx.currentTime, o = SND.ctx.createOscillator(), g = SND.ctx.createGain();
+  o.connect(g); g.connect(SND.fx);
+  if (type === 'pop'){          // nút bấm: tiếng "póc" nhỏ đi lên
+    o.type='sine'; o.frequency.setValueAtTime(520,t); o.frequency.exponentialRampToValueAtTime(980,t+0.08);
+    g.gain.setValueAtTime(0.18,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.13);
+    o.start(t); o.stop(t+0.14);
+  } else if (type === 'boing'){ // đồ vật: "boing" nảy lên
+    o.type='sine'; o.frequency.setValueAtTime(180,t); o.frequency.exponentialRampToValueAtTime(640,t+0.16);
+    o.frequency.exponentialRampToValueAtTime(260,t+0.34);
+    g.gain.setValueAtTime(0.2,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.42);
+    o.start(t); o.stop(t+0.44);
+  } else if (type === 'ding'){  // cảnh, thông điệp, nhân vật: "ting"
+    o.type='triangle'; o.frequency.value=1046;
+    g.gain.setValueAtTime(0.16,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.6);
+    o.start(t); o.stop(t+0.62);
+  } else if (type === 'whoosh'){ // mở/đóng cửa sổ: "vút"
+    o.type='triangle'; o.frequency.setValueAtTime(260,t); o.frequency.exponentialRampToValueAtTime(900,t+0.22);
+    g.gain.setValueAtTime(0.07,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.26);
+    o.start(t); o.stop(t+0.28);
+  } else {                      // tick: di chuột qua
+    o.type='square'; o.frequency.value=1400;
+    g.gain.setValueAtTime(0.02,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.03);
+    o.start(t); o.stop(t+0.04);
+  }
+}
+const CLICK_SEL = 'button, a, .person, .prop, .ch, .scene, .msg, .card, .stat, .chip';
+document.addEventListener('pointerdown', e=>{
+  ensureAudio();
+  if (SND.ctx && SND.ctx.state === 'suspended') SND.ctx.resume();
+  const el = e.target.closest(CLICK_SEL); if (!el) return;
+  if (el.matches('.prop')) sfx('boing');
+  else if (el.matches('.scene, .msg, .card, .stat')) sfx('ding');
+  else sfx('pop');
+}, true);
+let lastHover = 0;
+document.addEventListener('pointerover', e=>{
+  const el = e.target.closest(CLICK_SEL); if (!el) return;
+  const now = performance.now(); if (now - lastHover < 90) return; lastHover = now;
+  sfx('tick');
+}, true);
+
+
 buildBg();
 buildLoader();
 buildActors();
