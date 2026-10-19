@@ -454,6 +454,7 @@ footer .big{font-size:20px;font-weight:900;color:var(--text);margin-bottom:6px}
       <button class="cta" id="dlBtn" style="margin-top:18px"><span class="ico">⬇</span> <span id="dlLabel">Tải xuống kịch bản</span></button>
       <div class="pbar" id="pbar"><i id="pfill"></i></div>
       <div class="dl-status" id="dlStatus" aria-live="polite"></div>
+      <div class="dl-status" style="margin-top:4px"><a href="files/Kich_ban_tuyen_truyen_bao_luc_hoc_duong_Hoa.docx" download style="color:var(--coral);font-weight:800">📎 Link tải trực tiếp (dự phòng)</a></div>
     </div>
   </div>
 </section>
@@ -1024,10 +1025,29 @@ function confetti(x,y,n=70){
     document.body.appendChild(p); setTimeout(()=>p.remove(),1500);
   }
 }
+function directDownload(){
+  // Tải trực tiếp bằng thẻ link: hoạt động cả khi mở file trên máy (file://) lẫn trên Vercel
+  const a = document.createElement('a');
+  a.href = FILE; a.download = FILE_NAME; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+}
 async function download(){
   const btn=$('#dlBtn'), label=$('#dlLabel'), bar=$('#pbar'), fill=$('#pfill'), status=$('#dlStatus');
   if (btn.disabled) return;
-  btn.disabled=true; label.textContent='Đang kết nối…'; bar.classList.add('on'); fill.style.width='0%';
+  btn.disabled=true; bar.classList.add('on'); fill.style.width='0%';
+  const r = btn.getBoundingClientRect(); confetti(r.left+r.width/2, r.top, 50);
+
+  // Mở bằng file:// (xem trực tiếp trên máy): trình duyệt không cho đọc file bằng fetch, nên tải thẳng
+  if (location.protocol === 'file:'){
+    label.textContent='Đang tải…'; fill.style.width='100%';
+    directDownload();
+    status.textContent='Nếu trình duyệt chưa tải, hãy bấm link dự phòng bên dưới.';
+    toast('Đã bắt đầu tải kịch bản!');
+    setTimeout(()=>{ bar.classList.remove('on'); label.textContent='Tải xuống kịch bản'; btn.disabled=false; }, 1500);
+    return;
+  }
+
+  label.textContent='Đang kết nối…';
   try{
     const res = await fetch(FILE);
     if(!res.ok) throw new Error('HTTP '+res.status);
@@ -1049,11 +1069,13 @@ async function download(){
     const a = document.createElement('a'); a.href=url; a.download=FILE_NAME;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url), 4000);
-    const r = btn.getBoundingClientRect(); confetti(r.left+r.width/2, r.top);
     status.textContent='Đã tải xong ✔'; toast('Đã tải xong kịch bản! 🎉');
   }catch(err){
-    console.error(err); status.textContent='Tải không thành công. Vui lòng thử lại.';
-    toast('Tải không thành công, thử lại sau.', true);
+    // Không đọc được bằng fetch (ví dụ thiếu thư mục files/ hoặc mạng chặn): thử tải trực tiếp
+    console.error(err);
+    directDownload();
+    status.textContent='Đang thử tải trực tiếp. Nếu không được, hãy bấm link dự phòng bên dưới.';
+    toast('Đang thử tải trực tiếp…');
   }finally{
     setTimeout(()=>bar.classList.remove('on'),900);
     label.textContent='Tải xuống kịch bản'; btn.disabled=false;
